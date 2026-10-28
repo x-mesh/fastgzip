@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        go: ["1.24.x", "stable"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go test -gcflags=all=-d=checkptr ./...
+      - run: go test -run '^$' -fuzz '^FuzzInflate$' -fuzztime 20s -fuzzminimizetime 1s .
+      - run: go test -run '^$' -fuzz '^FuzzReader$' -fuzztime 20s -fuzzminimizetime 1s .
+      - name: bench module builds
+        if: matrix.go == 'stable'
+        working-directory: bench
+        run: go vet ./...
