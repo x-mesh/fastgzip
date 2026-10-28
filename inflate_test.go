@@ -6,6 +6,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"errors"
+	"hash/crc32"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -308,6 +309,21 @@ func FuzzReader(f *testing.F) {
 	for _, lv := range []int{1, 6, 9} {
 		f.Add(gzipBytes(f, sampleData(r, 3000), lv))
 	}
+	// headers with every optional field, so the fuzzer reaches their checks
+	var buf bytes.Buffer
+	w, _ := gzip.NewWriterLevel(&buf, 6)
+	w.Header = gzip.Header{Name: "name.log", Comment: "comment", Extra: []byte("xx")}
+	w.Write(sampleData(r, 2000))
+	w.Close()
+	h := buf.Bytes()
+	f.Add(h)
+	// the same member with FHCRC: flag bit, then the CRC-16 after the comment
+	end := 10 + 2 + 2 + len("name.log") + 1 + len("comment") + 1
+	withCRC := append(append([]byte(nil), h[:end]...), 0, 0)
+	withCRC[3] |= flagHCRC
+	c := crc32.ChecksumIEEE(withCRC[:end])
+	withCRC[end], withCRC[end+1] = byte(c), byte(c>>8)
+	f.Add(append(withCRC, h[end:]...))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		var got []byte
 		z, err := NewReader(bytes.NewReader(b))
@@ -402,5 +418,51 @@ func TestReaderTruncatedPrefix(t *testing.T) {
 	}
 	if len(got) < len(data)/4 || !bytes.Equal(got, data[:len(got)]) {
 		t.Fatalf("got %d bytes; want a correct prefix of %d", len(got), len(data))
+	}
+}
+
+// Header checks follow compress/gzip: a wrong FHCRC and a name or comment
+// longer than 511 bytes are ErrHeader; reserved flag bits are accepted.
+func TestHeaderLikeStdlib(t *testing.T) {
+	member := func(flg byte, fields []byte) []byte {
+		body := gzipBytes(t, []byte("hello"), 6)
+		h := append([]byte{0x1f, 0x8b, 8, flg, 0, 0, 0, 0, 0, 255}, fields...)
+		return append(h, body[10:]...)
+	}
+	withCRC := func(flg byte, fields []byte, flip byte) []byte {
+		h := append([]byte{0x1f, 0x8b, 8, flg | flagHCRC, 0, 0, 0, 0, 0, 255}, fields...)
+		c := crc32.ChecksumIEEE(h)
+		return member(flg|flagHCRC, append(append([]byte(nil), fields...), byte(c)^flip, byte(c>>8)))
+	}
+	name := func(n int) []byte { return append(bytes.Repeat([]byte("n"), n), 0) }
+	cases := map[string][]byte{
+		"reserved bits":      member(0xe0, nil),
+		"FHCRC correct":      withCRC(0, nil, 0),
+		"FHCRC wrong":        withCRC(0, nil, 1),
+		"FHCRC over name":    withCRC(flagName, name(20), 0),
+		"FHCRC wrong, extra": withCRC(flagExtra, []byte{3, 0, 'a', 'b', 'c'}, 1),
+		"name 511 bytes":     member(flagName, name(511)),
+		"name 512 bytes":     member(flagName, name(512)),
+		"comment 512 bytes":  member(flagComment, name(512)),
+		"peer report (0x32)": []byte("\x1f\x8b\b2000000\x00000\x12\x00\xed\xffhello ERROR world\n\x030{\xe3\xc9`\x12\x00\x00\x00"),
+	}
+	for name, b := range cases {
+		var want error
+		if r, err := gzip.NewReader(bytes.NewReader(b)); err != nil {
+			want = err
+		} else {
+			_, want = io.ReadAll(r)
+		}
+		_, err := Gunzip(b)
+		if (err == nil) != (want == nil) || (want == gzip.ErrHeader && err != ErrHeader) {
+			t.Errorf("%s: Gunzip err = %v, compress/gzip %v", name, err, want)
+		}
+		z, err := NewReader(bytes.NewReader(b))
+		if err == nil {
+			_, err = io.ReadAll(z)
+		}
+		if (err == nil) != (want == nil) || (want == gzip.ErrHeader && err != ErrHeader) {
+			t.Errorf("%s: Reader err = %v, compress/gzip %v", name, err, want)
+		}
 	}
 }

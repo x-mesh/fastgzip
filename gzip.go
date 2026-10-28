@@ -1,8 +1,10 @@
 package fastgzip
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"sync"
 )
@@ -22,6 +24,10 @@ const (
 	flagExtra   = 1 << 2
 	flagName    = 1 << 3
 	flagComment = 1 << 4
+
+	// maxHeaderString bounds a name or comment with its NUL terminator, as
+	// compress/gzip does: a longer one is ErrHeader.
+	maxHeaderString = 512
 )
 
 // Gunzip decodes every gzip member in src and returns the concatenated data.
@@ -98,25 +104,31 @@ func headerLen(b []byte) (int, error) {
 		}
 		i += 2 + int(binary.LittleEndian.Uint16(b[i:]))
 	}
+	if i > len(b) {
+		return 0, errEOF
+	}
 	for _, f := range [2]byte{flagName, flagComment} {
 		if flg&f == 0 {
 			continue
 		}
-		for {
-			if i >= len(b) {
-				return 0, errEOF
+		field := b[i:min(len(b), i+maxHeaderString)]
+		n := bytes.IndexByte(field, 0)
+		if n < 0 {
+			if len(field) == maxHeaderString {
+				return 0, ErrHeader
 			}
-			i++
-			if b[i-1] == 0 {
-				break
-			}
+			return 0, errEOF
 		}
+		i += n + 1
 	}
 	if flg&flagHCRC != 0 {
+		if len(b) < i+2 {
+			return 0, errEOF
+		}
+		if uint16(crc32.ChecksumIEEE(b[:i])) != binary.LittleEndian.Uint16(b[i:]) {
+			return 0, ErrHeader
+		}
 		i += 2
-	}
-	if i > len(b) {
-		return 0, errEOF
 	}
 	return i, nil
 }
@@ -251,11 +263,15 @@ func (z *Reader) member() error {
 		}
 		return io.EOF
 	}
+	// digest is the CRC-32 of the header bytes read so far, for FHCRC
+	var digest uint32
 	next := func() (byte, error) {
 		if err := d.need(8); err != nil {
 			return 0, err
 		}
-		return byte(d.take(8)), nil
+		b := byte(d.take(8))
+		digest = crc32.Update(digest, crc32.IEEETable, []byte{b})
+		return b, nil
 	}
 	skip := func(n int) error {
 		for ; n > 0; n-- {
@@ -294,7 +310,10 @@ func (z *Reader) member() error {
 		if flg&f == 0 {
 			continue
 		}
-		for {
+		for n := 0; ; n++ {
+			if n == maxHeaderString {
+				return ErrHeader
+			}
 			b, err := next()
 			if err != nil {
 				return err
@@ -305,8 +324,17 @@ func (z *Reader) member() error {
 		}
 	}
 	if flg&flagHCRC != 0 {
-		if err := skip(2); err != nil {
+		want := uint16(digest)
+		lo, err := next()
+		if err != nil {
 			return err
+		}
+		hi, err := next()
+		if err != nil {
+			return err
+		}
+		if uint16(lo)|uint16(hi)<<8 != want {
+			return ErrHeader
 		}
 	}
 	d.state = blockHeader
