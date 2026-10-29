@@ -12,15 +12,21 @@ func TestCRCUpdate(t *testing.T) {
 	for i := range buf {
 		buf[i] = byte(r.Uint32())
 	}
-	const lane = 16 << 10 // crcLane on arm64
-	sizes := []int{0, 1, 15, 3*lane - 1, 3 * lane, 3*lane + 1, 6*lane + 5, len(buf)}
-	for _, n := range sizes {
-		for _, init := range []uint32{0, 0xdeadbeef} {
-			want := crc32.Update(init, crc32.IEEETable, buf[:n])
-			if got := crcUpdate(init, buf[:n]); got != want {
-				t.Fatalf("n=%d init=%#x: got %#x want %#x", n, init, got, want)
+	// every length across the 128-byte blocks of crc32pmull, at unaligned
+	// starts
+	for n := range 1100 {
+		for _, off := range []int{0, 1, 7} {
+			for _, init := range []uint32{0, 0xdeadbeef} {
+				p := buf[off : off+n]
+				want := crc32.Update(init, crc32.IEEETable, p)
+				if got := crcUpdate(init, p); got != want {
+					t.Fatalf("n=%d off=%d init=%#x: got %#x want %#x", n, off, init, got, want)
+				}
 			}
 		}
+	}
+	if got, want := crcUpdate(0, buf), crc32.ChecksumIEEE(buf); got != want {
+		t.Fatalf("n=%d: got %#x want %#x", len(buf), got, want)
 	}
 	// chained updates over uneven pieces
 	var got, want uint32
@@ -46,7 +52,7 @@ func BenchmarkCRC(b *testing.B) {
 			crc32.Update(0, crc32.IEEETable, buf)
 		}
 	})
-	b.Run("x3", func(b *testing.B) {
+	b.Run("fastgzip", func(b *testing.B) {
 		b.SetBytes(int64(len(buf)))
 		for b.Loop() {
 			crcUpdate(0, buf)

@@ -9,6 +9,6 @@
 // The decoder uses a 64-bit bit buffer refilled with one 8-byte load, table
 // entries that count their extra bits so one shift consumes a code and its
 // extra bits, table loads overlapped with refills, decoding the next symbol
-// before a match copy, and wide match copies. On arm64 the CRC-32 runs three CRC32X chains in parallel
-// in assembly; elsewhere it uses hash/crc32.
+// before a match copy, and wide match copies. On arm64 the CRC-32 folds eight
+// 128-bit lanes with PMULL in assembly; elsewhere it uses hash/crc32.
 package fastgzip

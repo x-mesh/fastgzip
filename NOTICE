@@ -1,7 +1,6 @@
 fastgzip contains code ported from zlib 1.2.12 and altered:
 
   tables.go        from inftrees.c (inflate_table)
-  crc32_arm64.go   from crc32.c (multmodp, x2nmodp)
 
 zlib carries this license:
 
