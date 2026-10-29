@@ -71,11 +71,18 @@ func Gunzip(src []byte) ([]byte, error) {
 	return out, nil
 }
 
-// Above this size Gunzip computes the checksum on another goroutine, one
-// block behind the decoder. Even at 25 GB/s the checksum is a quarter of the
-// time for highly compressible data (40 MB from 600 KB: 8.1 to 6.2 ms on an
-// M1 Pro); below this size the goroutine costs more than it saves.
+// Above this size Gunzip computes the checksum on another goroutine, behind
+// the decoder by up to crcBatch bytes. Even at 45 GB/s the checksum is a
+// tenth of the time for highly compressible data (40 MB from 600 KB: 7.0 to
+// 6.3 ms on an M1 Pro); below this size the goroutine costs more than it
+// saves.
 const concurrentCRCSize = 1 << 20
+
+// crcBatch is the least output inflate hands to the checksum goroutine at
+// once. Each hand-off can wake the goroutine; one per block (136 KB on
+// average in a gzip -1 log) cost more than the checksum: 68.3 ms inline,
+// 72.1 ms per block and 67.3 ms per 1 MB for a 100 MB log.
+const crcBatch = 1 << 20
 
 func inflateConcurrentCRC(dst, src []byte) ([]byte, int, uint32, error) {
 	blocks := make(chan []byte, 64)

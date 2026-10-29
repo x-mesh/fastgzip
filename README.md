@@ -47,13 +47,13 @@ The table shows the median time of 11 runs in milliseconds. The machine is an Ap
 
 | File | Size | compress/gzip | klauspost v1.20.3 | fastgzip |
 |---|---|---|---|---|
-| Application log, `gzip -1` | 100 MB | 357 | 241 | 72.6 |
-| Binaries, level 6 | 16 MB | 64 | 44 | 18.6 |
-| Word list, level 1 | 2.5 MB | 14.4 | 9.9 | 3.5 |
-| Short repeated patterns, level 6 | 40 MB | 13.8 | 11.7 | 8.0 |
-| Byte runs, `Z_RLE` | 15 MB | 8.1 | 7.0 | 3.3 |
+| Application log, `gzip -1` | 100 MB | 357 | 241 | 70.5 |
+| Binaries, level 6 | 16 MB | 64 | 44 | 17.6 |
+| Word list, level 1 | 2.5 MB | 14.4 | 9.9 | 3.4 |
+| Short repeated patterns, level 6 | 40 MB | 13.8 | 11.7 | 7.2 |
+| Byte runs, `Z_RLE` | 15 MB | 8.1 | 7.0 | 3.0 |
 
-For comparison, Apple's libz decodes the 100 MB log in 71.4 ms with one C `inflate` call. `Gunzip` decodes it in 69.5 ms. On Linux arm64 (Docker on the same Mac), the `Reader` time for the log is 72.3 ms. On the same machine, klauspost needs 247 ms, and Debian zlib 1.3.1 needs 193 ms through Python.
+For comparison, Apple's libz decodes the 100 MB log in 71.4 ms with one C `inflate` call. `Gunzip` decodes it in 68.7 ms. On Linux arm64 (Docker on the same Mac), the `Reader` time for the log is 70.9 ms. On the same machine, klauspost needs 244 ms, and Debian zlib 1.3.1 needs 193 ms through Python.
 
 We did not measure performance on amd64.
 
@@ -73,8 +73,8 @@ go run . -stream -n 9 /path/to/*.gz
 - The decoder reads the next symbol before it copies a match.
 - The bit count uses the libdeflate method. The decoder subtracts the full entry and uses only the low 6 bits.
 - Match copies move 16 bytes at a time. The first 32 bytes have no loop test, because most matches in log data are 16 bytes or shorter. A short distance repeats as a pattern.
-- On arm64, an assembly function computes CRC-32 in three parallel `CRC32X` chains. This is 24.7 GB/s, and `hash/crc32` is 8.4 GB/s.
-- Above 1 MB, `Gunzip` computes the CRC-32 on a second goroutine.
+- On arm64, an assembly function computes CRC-32 with `PMULL` carry-less multiplies. It folds eight 128-bit lanes in parallel. This is 45 GB/s, and `hash/crc32` is 8.4 GB/s.
+- Above 1 MB, `Gunzip` computes the CRC-32 on a second goroutine. The decoder gives it the output in steps of 1 MB or more, because each step can wake the goroutine.
 
 ## Safety
 
@@ -103,4 +103,4 @@ To profile one file, set `FASTGZIP_BENCH` and run `BenchmarkReader` or `Benchmar
 
 ## License
 
-MIT. The table builder in `tables.go` and the CRC-32 combine code in `crc32_arm64.go` are ports of zlib 1.2.12. [NOTICE](NOTICE) has the zlib license.
+MIT. The table builder in `tables.go` is a port of zlib 1.2.12. [NOTICE](NOTICE) has the zlib license.

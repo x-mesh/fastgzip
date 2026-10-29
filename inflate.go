@@ -100,7 +100,8 @@ func Inflate(dst, src []byte) ([]byte, int, error) {
 	return inflate(dst, src, nil)
 }
 
-// inflate sends each finished block's output to blocks when it is not nil.
+// inflate sends finished blocks' output to blocks when it is not nil, at
+// least crcBatch bytes at a time and the rest after the final block.
 // Those bytes are never written again, so a reader may use them while
 // decoding continues.
 func inflate(dst, src []byte, blocks chan<- []byte) ([]byte, int, error) {
@@ -216,7 +217,7 @@ func (d *decoder) step() error {
 }
 
 func (d *decoder) endBlock() {
-	if d.blocks != nil && len(d.out) > d.sent {
+	if d.blocks != nil && len(d.out) > d.sent && (d.final || len(d.out)-d.sent >= crcBatch) {
 		d.blocks <- d.out[d.sent:]
 		d.sent = len(d.out)
 	}
